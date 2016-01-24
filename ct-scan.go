@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"time"
 
 	"github.com/google/certificate-transparency/go"
 	"github.com/google/certificate-transparency/go/asn1"
@@ -14,13 +15,16 @@ import (
 )
 
 var (
-	logURL  string
-	verbose bool
+	logURL                       string
+	verbose                      bool
+	earliestString, latestString string
 )
 
 func init() {
 	flag.StringVar(&logURL, "log-url", "ct.ws.symantec.com", "CT Log to scan")
 	flag.BoolVar(&verbose, "v", false, "Whether to print scanning data")
+	flag.StringVar(&earliestString, "earliest", "2015-01-01", "Earliest NotBefore time (parsed as 2006-01-02)")
+	flag.StringVar(&latestString, "latest", "2016-01-01", "Earliest NotBefore time (parsed as 2006-01-02)")
 }
 
 var evOIDs = []asn1.ObjectIdentifier{
@@ -57,9 +61,15 @@ var evOIDs = []asn1.ObjectIdentifier{
 	asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 6334, 1, 100, 1},
 }
 
-type matchEVCert struct{}
+type matchEVCert struct {
+	earliest, latest time.Time
+}
 
 func (m matchEVCert) CertificateMatches(c *x509.Certificate) bool {
+	if c.NotBefore.Before(m.earliest) || c.NotBefore.After(m.latest) {
+		return false
+	}
+
 	for _, oid := range c.PolicyIdentifiers {
 		for _, evOID := range evOIDs {
 			if oid.Equal(evOID) {
@@ -76,6 +86,15 @@ func (m matchEVCert) PrecertificateMatches(p *ct.Precertificate) bool {
 
 func main() {
 	flag.Parse()
+	earliest, err := time.Parse("2006-01-02", earliestString)
+	if err != nil {
+		log.Fatal(err)
+	}
+	latest, err := time.Parse("2006-01-02", latestString)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	u, err := url.Parse(logURL)
 	if err != nil {
 		log.Fatal(err)
@@ -86,16 +105,23 @@ func main() {
 	}
 	c := client.New(u.String())
 	opts := scanner.ScannerOptions{
-		Matcher:       matchEVCert{},
+		Matcher:       matchEVCert{earliest, latest},
 		BatchSize:     1000,
 		NumWorkers:    100,
 		ParallelFetch: 100,
 		Quiet:         !verbose,
 	}
-	err = scanner.NewScanner(c, opts).Scan(func(le *ct.LogEntry) {
-		fmt.Println(le.X509Cert.Subject.CommonName)
+	log.Printf("Scanning %s for EV certs issued between %s and %s...\n", u.String(), earliest, latest)
+
+	s := scanner.NewScanner(c, opts)
+	var count int
+	err = s.Scan(func(le *ct.LogEntry) {
+		count++
+		fmt.Printf("%d: %s\n", count, le.X509Cert.Subject.CommonName)
 	}, func(le *ct.LogEntry) {})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	fmt.Printf("Found %d EV Certs\n", count)
 }
