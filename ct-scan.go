@@ -18,6 +18,7 @@ var (
 	logURL                       string
 	verbose                      bool
 	earliestString, latestString string
+	zero                         time.Time
 )
 
 func init() {
@@ -66,7 +67,7 @@ type matchEVCert struct {
 }
 
 func (m matchEVCert) CertificateMatches(c *x509.Certificate) bool {
-	if c.NotBefore.Before(m.earliest) || c.NotBefore.After(m.latest) {
+	if m.earliest != zero && c.NotBefore.Before(m.earliest) || m.latest != zero && c.NotBefore.After(m.latest) {
 		return false
 	}
 
@@ -88,11 +89,11 @@ func main() {
 	flag.Parse()
 	earliest, err := time.Parse("2006-01-02", earliestString)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	latest, err := time.Parse("2006-01-02", latestString)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	u, err := url.Parse(logURL)
@@ -108,7 +109,7 @@ func main() {
 		Matcher:       matchEVCert{earliest, latest},
 		BatchSize:     1000,
 		NumWorkers:    100,
-		ParallelFetch: 100,
+		ParallelFetch: 10,
 		Quiet:         !verbose,
 	}
 	log.Printf("Scanning %s for EV certs issued between %s and %s...\n", u.String(), earliest, latest)
@@ -117,7 +118,7 @@ func main() {
 	var count int
 	err = s.Scan(func(le *ct.LogEntry) {
 		count++
-		fmt.Printf("%d: %s\n", count, le.X509Cert.Subject.CommonName)
+		fmt.Printf("%d,%s,%s,%s\n", count, le.X509Cert.Subject.CommonName, le.X509Cert.Issuer.CommonName, le.X509Cert.NotBefore)
 	}, func(le *ct.LogEntry) {})
 	if err != nil {
 		log.Fatal(err)
